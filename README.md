@@ -6,6 +6,7 @@ Plays **16-bit stereo 44.1 kHz WAV** (smooth on this board). MP3 is converted on
 ## 1. Name your media
 
 Each song and photo must share the same basename:
+**Open two folders to store the image('photo') and song('music')**
 
 ```text
 music/海闊天空.mp3
