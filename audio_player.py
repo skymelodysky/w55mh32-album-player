@@ -165,14 +165,23 @@ def play(filename, duration_ms, next_button, play_button, use_overlay=True):
         print("audio error:", filename, exc)
         result = "error"
     finally:
+        if time_bar is not None:
+            try:
+                time_bar.reset()
+            except Exception:
+                pass
         time_bar = None
         if i2s is not None:
             try:
-                time.sleep_ms(50)
+                time.sleep_ms(80)
                 i2s.deinit()
-                time.sleep_ms(100)
+                time.sleep_ms(150)
             except Exception as exc:
                 print("i2s.deinit error:", exc)
+            i2s = None
+        buf = None
+        gc.collect()
         gc.collect()
 
     return result
+
