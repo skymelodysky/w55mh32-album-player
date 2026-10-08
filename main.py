@@ -1,4 +1,4 @@
-"""W55MH32L-EVB landscape photo + WAV player."""
+"""W55MH32-ADK landscape photo + WAV player."""
 
 import gc
 import os
@@ -18,7 +18,8 @@ AUDIO_HOLE_SIZE = 22000
 NEXT_BUTTON = Pin("PF13", Pin.IN, Pin.PULL_UP)
 PLAY_BUTTON = Pin("PF11", Pin.IN, Pin.PULL_UP)
 
-_audio_hole = None
+# Use a list so release can drop the only reference with pop().
+_holes = []
 
 
 def unload(name):
@@ -29,24 +30,33 @@ def unload(name):
     gc.collect()
 
 
-def reserve_audio_hole():
-    global _audio_hole
-    _audio_hole = None
+def hard_gc():
     gc.collect()
+    time.sleep_ms(20)
+    gc.collect()
+
+
+def reserve_audio_hole():
+    release_audio_hole()
     for size in (AUDIO_HOLE_SIZE, 16384, 12288):
         try:
-            _audio_hole = bytearray(size)
-            print("audio hole:", size)
+            _holes.append(bytearray(size))
+            print("audio hole:", size, "free:", gc.mem_free())
             return
         except MemoryError:
-            _audio_hole = None
-    print("audio hole: none")
+            pass
+    print("audio hole: none", "free:", gc.mem_free())
 
 
 def release_audio_hole():
-    global _audio_hole
-    _audio_hole = None
-    gc.collect()
+    freed = 0
+    while _holes:
+        block = _holes.pop()
+        freed += len(block)
+        block = None
+    hard_gc()
+    if freed:
+        print("hole freed:", freed, "free:", gc.mem_free())
 
 
 def mount_sd():
@@ -87,18 +97,28 @@ def show_screen(item):
     finally:
         unload("photo_display")
         unload("st7789_min")
-        gc.collect()
+        hard_gc()
         print("free before audio:", gc.mem_free())
 
 
 def play_song(item):
     path = MUSIC_DIR + item["music"]
     result = "error"
-    # Hand the contiguous block to the player before any audio allocs.
+
+    before = gc.mem_free()
     release_audio_hole()
-    time.sleep_ms(50)
-    gc.collect()
-    print("free after hole release:", gc.mem_free())
+    hard_gc()
+    after = gc.mem_free()
+    print("free after hole release:", after, "delta:", after - before)
+    # If hole did not come back, scrub modules again before I2S.
+    if after - before < 4000:
+        unload("audio_player")
+        unload("time_bar")
+        unload("playback_overlay")
+        unload("photo_display")
+        unload("st7789_min")
+        hard_gc()
+        print("extra cleanup free:", gc.mem_free())
 
     for attempt in range(MAX_PLAY_RETRIES):
         try:
@@ -122,16 +142,17 @@ def play_song(item):
             unload("audio_player")
             unload("time_bar")
             unload("playback_overlay")
-            gc.collect()
+            hard_gc()
             print("free after audio:", gc.mem_free())
 
         if result in ("finished", "next"):
             break
         print("reload song:", path, "attempt", attempt + 1)
-        time.sleep_ms(100)
-        gc.collect()
+        hard_gc()
+        time.sleep_ms(80)
 
-    reserve_audio_hole()
+    # Do NOT reserve here — heap is still warm/fragmented.
+    # Reserve again only right before the next show_screen.
     return result
 
 
@@ -141,19 +162,22 @@ def main():
         playlist = load_playlist()
     except Exception as exc:
         print("playlist error:", exc)
-        print("Run prepare_media.py and copy playlist.json + music/*.wav + ui to SD.")
+        print(
+            "Run prepare_media.py and copy playlist.json + music/*.wav + ui to SD."
+        )
         return
 
     if not playlist:
         print("playlist.json has no playable entries")
         return
 
-    reserve_audio_hole()
     print("tracks:", len(playlist))
     index = 0
     while True:
         item = playlist[index]
         print("track:", item.get("title", item["music"]))
+        hard_gc()
+        reserve_audio_hole()
         show_screen(item)
         result = play_song(item)
         if result not in ("finished", "next"):
@@ -162,3 +186,4 @@ def main():
 
 
 main()
+
